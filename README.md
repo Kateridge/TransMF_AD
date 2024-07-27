@@ -1,7 +1,5 @@
 # Transformer-based Multimodal Fusion for Early Diagnosis of Alzheimer’s Disease Using Structural MRI and PET
 
----
-
 This repo contains PyTorch implementation of the paper: Transformer-based Multimodal Fusion for Early Diagnosis of Alzheimer’s Disease Using Structural MRI and PET. 
 
 [Paper Link](https://ieeexplore.ieee.org/abstract/document/10230577/)
@@ -9,8 +7,6 @@ This repo contains PyTorch implementation of the paper: Transformer-based Multim
 ![image](img/method.png)
 
 ## Setup Instructions
-
----
 
 ### Datasets
 
@@ -46,14 +42,10 @@ Label file
 
 ## Running the Model
 
----
-
 ``python kfold_train_adversarial.py --randint False --aug True --batch_size 8 --name <expr_name> --task <ADCN/pMCIsMCI> --model <CNN/Transformer> --dataroot <data_dir>
 ``
 
 ## References
-
----
 
 If you think our research work helpful, please consider citing our original paper.
 
