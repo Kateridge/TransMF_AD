@@ -1,15 +1,12 @@
 import glob
-import random
 
 import numpy as np
 import torch
 from datasets.ADNI import ADNI, ADNI_transform
-from models.mymodel import model_CNN, model_pretrain, model_ad, model_transformer, model_transformer_res, \
-    model_transformer_resnet
-from models.modelDSBN import model_CNN_DSBN, model_CrossTransformer_DSBN
+from models.mymodel import model_single
 from options.option import Option
 from sklearn.model_selection import KFold, train_test_split
-from torch.utils.data import DataLoader, SubsetRandomSampler
+from torch.utils.data import DataLoader
 from monai.data import Dataset
 import ignite
 from ignite.metrics import Accuracy, Loss, Average, ConfusionMatrix
@@ -21,6 +18,7 @@ from utils.utils import getOptimizer, cal_confusion_metrics, mkdirs, get_dataset
 from torch.nn.functional import softmax
 from utils.utils import Logger
 import os
+import random
 
 if __name__ == '__main__':
     device = torch.device('cuda:{}'.format(0))
@@ -28,9 +26,9 @@ if __name__ == '__main__':
     opt = Option().parse()
     save_dir = os.path.join('./checkpoints', opt.name)
     # load ADNI dataset
-    ADNI_data = ADNI(dataroot=opt.dataroot, label_filename='ADNI.csv', task=opt.task).data_dict
+    ADNI_data = ADNI(dataroot='/home/kateridge/Projects/Projects/Datasets/ADNI',
+                     label_filename='ADNI.csv', task=opt.task).data_dict
     train_transforms, val_transforms = ADNI_transform(opt.aug)
-    logger_main = Logger(save_dir)
 
     # prepare kfold splits
     num_fold = 5
@@ -43,6 +41,7 @@ if __name__ == '__main__':
         seed = random.randint(1, 1000)
     print(f'The random seed is {seed}')
     kfold_splits = KFold(n_splits=num_fold, shuffle=True, random_state=seed)
+
 
     # get dataloaders according to splits
     def setup_dataflow(train_idx, test_idx):
@@ -62,7 +61,7 @@ if __name__ == '__main__':
         val_dataset = Dataset(data=val_data, transform=val_transforms)
         test_dataset = Dataset(data=test_data, transform=val_transforms)
         print(f'Train Datasets: {len(train_dataset)}')
-        train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, drop_last=True)
+        train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=opt.batch_size)
         test_loader = DataLoader(test_dataset, batch_size=opt.batch_size)
 
@@ -73,16 +72,7 @@ if __name__ == '__main__':
 
     # initialize model, optimizer, loss
     def init_model(model):
-        net_model = None
-        if model == 'Transformer':
-            net_model = model_CrossTransformer_DSBN(dim=opt.dim, depth=opt.trans_enc_depth, heads=4, dim_head=opt.dim // 4,
-                                      mlp_dim=opt.dim * 4,  dropout=opt.dropout).to(device)
-            # if opt.task == 'pMCIsMCI':
-            #     checkpoint_all = torch.load('./pretrain.pt', map_location=device)
-            #     Checkpoint.load_objects(to_load={'net_model': net_model}, checkpoint=checkpoint_all)
-            #     print('Load pre-training model')
-        elif model == 'CNN':
-            net_model = model_CNN_DSBN(dim=opt.dim).to(device)
+        net_model = model_single(opt.dim).to(device)
         return net_model
 
 
@@ -92,7 +82,7 @@ if __name__ == '__main__':
         mkdirs(save_path_fold)
         logger = Logger(save_path_fold)
         # initialize model, optimizer and loss
-        net_model = init_model(opt.model)
+        net_model = init_model('Single')
         optimizer, lr_schedualer = getOptimizer(net_model.parameters(), opt)
         # criterion = torch.nn.CrossEntropyLoss(weight=weights.to(device))
         criterion = torch.nn.CrossEntropyLoss()
@@ -104,14 +94,13 @@ if __name__ == '__main__':
             net_model.train()
             # decompose batch data
             MRI = batch['MRI'].to(device)
-            PET = batch['PET'].to(device)
             label = batch['label'].to(device)
             output_dic['label'] = label
             # zero grad
             optimizer.zero_grad()
 
             # forward
-            output_logits = net_model(MRI, PET)
+            output_logits = net_model(MRI)
             output_dic['logits'] = output_logits
             all_loss = criterion(output_logits, label)
             output_dic['loss'] = all_loss.item()
@@ -140,12 +129,11 @@ if __name__ == '__main__':
             with torch.no_grad():
                 # decompose batch data
                 MRI = batch['MRI'].to(device)
-                PET = batch['PET'].to(device)
                 label = batch['label'].to(device)
                 output_dic['label'] = label
 
                 # forward
-                output_logits = net_model(MRI, PET)
+                output_logits = net_model(MRI)
                 output_dic['logits'] = output_logits
                 all_loss = criterion(output_logits, label)
                 output_dic['loss'] = all_loss.item()
@@ -227,9 +215,6 @@ if __name__ == '__main__':
             logger.print_message(f"loss: {metrics['loss']:.4f} accuracy: {metrics['accuracy']:.4f} "
                                  f"sensitivity: {sen:.4f} specificity: {spe:.4f} "
                                  f"f1 score: {f1:.4f} AUC: {metrics['auc']:.4f} ")
-            logger_main.print_message_nocli(f"loss: {metrics['loss']:.4f} accuracy: {metrics['accuracy']:.4f} "
-                                 f"sensitivity: {sen:.4f} specificity: {spe:.4f} "
-                                 f"f1 score: {f1:.4f} AUC: {metrics['auc']:.4f} ")
             res_fold = [metrics['loss'], metrics['accuracy'], sen, spe, f1, metrics['auc']]
             evaluator.state.res_fold = res_fold
 
@@ -237,7 +222,9 @@ if __name__ == '__main__':
 
         return evaluator.state.res_fold
 
+
     results = []
+    logger_main = Logger(save_dir)
     for fold_idx, (train_idx, test_idx) in enumerate(kfold_splits.split(np.arange(len(ADNI_data)))):
         logger_main.print_message(f'************Fold {fold_idx}************')
         train_dataloader, val_dataloader, test_dataloader, weights = setup_dataflow(train_idx, test_idx)
@@ -254,4 +241,3 @@ if __name__ == '__main__':
                               f'spe: {res_mean[3]:.4f} +- {res_std[3]:.4f}\n'
                               f'f1: {res_mean[4]:.4f} +- {res_std[4]:.4f}\n'
                               f'auc: {res_mean[5]:.4f} +- {res_std[5]:.4f}\n')
-    print(f'The random seed is {seed}')

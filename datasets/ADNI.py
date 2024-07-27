@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 from monai.transforms import (
-    AddChanneld,
+    EnsureChannelFirstd,
     Compose,
     LoadImaged,
     SaveImaged,
@@ -19,8 +19,8 @@ class ADNI:
         self.labels = None
         self.label_dict = None
         self.data_dict = None
-        mri_dir = os.path.join(dataroot, 'MRI', 'NIIGZ_Origin')
-        pet_dir = os.path.join(dataroot, 'PET', 'NIIGZ_Origin')
+        mri_dir = os.path.join(dataroot, 'MRI')
+        pet_dir = os.path.join(dataroot, 'PET')
 
         # get data and labels according to specific task
         if task == 'ADCN':
@@ -33,21 +33,14 @@ class ADNI:
             self.labels = self.csv[
                 (self.csv['Group'] == 'pMCI') | (self.csv['Group'] == 'sMCI') | (self.csv['Group'] == 'MCI') | (
                             self.csv['Group'] == 'CN')]
-            self.label_dict = {'CN': 0, 'sMCI': 1, 
-            'pMCI': 1, 'MCI': 1}
-        if task == 'AGE':
-            self.labels = self.csv[self.csv['Group'] == 'CN']
-            self.label_dict = {'CN': 0}
-        if task == 'pretrain':
-            self.labels = self.csv
-            self.label_dict = {'CN': 0, 'AD': 1, 'sMCI': 1, 'pMCI': 1, 'MCI': 1}
+            self.label_dict = {'CN': 0, 'sMCI': 1, 'pMCI': 1, 'MCI': 1}
 
         # create data dic
         subject_list = self.labels['Subject'].tolist()
         label_list = self.labels['Group'].tolist()
         age_list = self.labels['Age'].tolist()
-        self.data_dict = [{'MRI': os.path.join(mri_dir, subject_name + '.nii'),
-                           'PET': os.path.join(pet_dir, subject_name + '.nii'),
+        self.data_dict = [{'MRI': os.path.join(mri_dir, subject_name + '.nii.gz'),
+                           'PET': os.path.join(pet_dir, subject_name + '.nii.gz'),
                            'label': self.label_dict[subject_label],
                            'age': subject_age,
                            'Subject': subject_name}
@@ -67,7 +60,7 @@ def ADNI_transform(aug='True'):
     if aug == 'True':
         train_transform = Compose([
                     LoadImaged(keys=['MRI', 'PET']),
-                    AddChanneld(keys=['MRI', 'PET']),
+                    EnsureChannelFirstd(keys=['MRI', 'PET']),
                     ScaleIntensityd(keys=['MRI', 'PET']),
                     # Augment
                     RandFlipd(keys=['MRI', 'PET'], prob=0.3, spatial_axis=0),
@@ -78,13 +71,13 @@ def ADNI_transform(aug='True'):
     else:
         train_transform = Compose([
                     LoadImaged(keys=['MRI', 'PET']),
-                    AddChanneld(keys=['MRI', 'PET']),
+                    EnsureChannelFirstd(keys=['MRI', 'PET']),
                     ScaleIntensityd(keys=['MRI', 'PET']),
                     EnsureTyped(keys=['MRI', 'PET'])
                 ])
     test_transform = Compose([
                 LoadImaged(keys=['MRI', 'PET']),
-                AddChanneld(keys=['MRI', 'PET']),
+                EnsureChannelFirstd(keys=['MRI', 'PET']),
                 ScaleIntensityd(keys=['MRI', 'PET']),
                 EnsureTyped(keys=['MRI', 'PET'])
             ])
@@ -95,26 +88,26 @@ def ADNI_transform_Mnet(aug='True'):
     if aug == 'True':
         train_transform = Compose([
                     LoadImaged(keys=['MRI', 'PET']),
-                    AddChanneld(keys=['MRI', 'PET']),
+                    EnsureChannelFirstd(keys=['MRI', 'PET']),
                     ScaleIntensityd(keys=['MRI', 'PET']),
                     SpatialPadd(keys=['MRI', 'PET'], spatial_size=(91,109,91)),
                     # Augment
                     RandFlipd(keys=['MRI', 'PET'], prob=0.3, spatial_axis=0),
-                    # RandRotated(keys=['MRI', 'PET'], prob=0.3, range_x=0.05),
-                    # RandZoomd(keys=['MRI', 'PET'], prob=0.3, min_zoom=0.95, max_zoom=1),
+                    RandRotated(keys=['MRI', 'PET'], prob=0.3, range_x=0.05),
+                    RandZoomd(keys=['MRI', 'PET'], prob=0.3, min_zoom=0.95, max_zoom=1),
                     EnsureTyped(keys=['MRI', 'PET'])
                 ])
     else:
         train_transform = Compose([
                     LoadImaged(keys=['MRI', 'PET']),
-                    AddChanneld(keys=['MRI', 'PET']),
+                    EnsureChannelFirstd(keys=['MRI', 'PET']),
                     ScaleIntensityd(keys=['MRI', 'PET']),
                     SpatialPadd(keys=['MRI', 'PET'], spatial_size=(91, 109, 91)),
                     EnsureTyped(keys=['MRI', 'PET'])
                 ])
     test_transform = Compose([
                 LoadImaged(keys=['MRI', 'PET']),
-                AddChanneld(keys=['MRI', 'PET']),
+                EnsureChannelFirstd(keys=['MRI', 'PET']),
                 ScaleIntensityd(keys=['MRI', 'PET']),
                 SpatialPadd(keys=['MRI', 'PET'], spatial_size=(91, 109, 91)),
                 EnsureTyped(keys=['MRI', 'PET'])
@@ -124,16 +117,16 @@ def ADNI_transform_Mnet(aug='True'):
 def ADNI_transform_ADVIT(aug='True'):
     train_transform = Compose([
                     LoadImaged(keys=['MRI', 'PET']),
-                    AddChanneld(keys=['MRI', 'PET']),
+                    EnsureChannelFirstd(keys=['MRI', 'PET']),
                     ScaleIntensityd(keys=['MRI', 'PET']),
-                    SpatialPadd(keys=['MRI', 'PET'], spatial_size=(128,128,79)),
+                    SpatialPadd(keys=['MRI', 'PET'], spatial_size=(128, 128, 79)),
                     EnsureTyped(keys=['MRI', 'PET'])
                 ])
     test_transform = Compose([
                 LoadImaged(keys=['MRI', 'PET']),
-                AddChanneld(keys=['MRI', 'PET']),
+                EnsureChannelFirstd(keys=['MRI', 'PET']),
                 ScaleIntensityd(keys=['MRI', 'PET']),
-                SpatialPadd(keys=['MRI', 'PET'], spatial_size=(128,128,79)),
+                SpatialPadd(keys=['MRI', 'PET'], spatial_size=(128, 128, 79)),
                 EnsureTyped(keys=['MRI', 'PET'])
             ])
     return train_transform, test_transform

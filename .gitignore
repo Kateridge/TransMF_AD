@@ -5,6 +5,8 @@
 /.vscode/
 /bin/
 
+ADNI.csv
+dataset.py
 .classpath
 .project
 .settings
@@ -48,5 +50,4 @@ Thumbs.db
 /mvnw.cmd
 /mvnw
 /checkpoints
-*.png
 *.pt

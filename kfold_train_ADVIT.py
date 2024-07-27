@@ -3,9 +3,8 @@ import random
 
 import numpy as np
 import torch
-from datasets.ADNI import ADNI, ADNI_transform, ADNI_transform_Mnet
-from models.mymodel import model_CNN, model_pretrain, model_ad, model_transformer, model_transformer_res, \
-    model_transformer_resnet
+from datasets.ADNI import ADNI, ADNI_transform_ADVIT
+from models.ADVIT import ADVIT
 from options.option import Option
 from sklearn.model_selection import KFold, train_test_split
 from torch.utils.data import DataLoader, SubsetRandomSampler
@@ -15,8 +14,8 @@ from ignite.metrics import Accuracy, Loss, Average, ConfusionMatrix
 from ignite.engine import Engine, Events
 from ignite.contrib.handlers import ProgressBar
 from ignite.contrib.metrics import ROC_AUC
-from ignite.handlers import Checkpoint, global_step_from_engine, DiskSaver, create_lr_scheduler_with_warmup, LRScheduler
-from utils.utils import getOptimizer, cal_confusion_metrics, mkdirs, get_dataset_weights
+from ignite.handlers import Checkpoint, global_step_from_engine, DiskSaver
+from utils.utils import cal_confusion_metrics, mkdirs, get_dataset_weights
 from torch.nn.functional import softmax
 from utils.utils import Logger
 import os
@@ -28,7 +27,7 @@ if __name__ == '__main__':
     save_dir = os.path.join('./checkpoints', opt.name)
     # load ADNI dataset
     ADNI_data = ADNI(dataroot=opt.dataroot, label_filename='ADNI.csv', task=opt.task).data_dict
-    train_transforms, val_transforms = ADNI_transform_Mnet(opt.aug)
+    train_transforms, val_transforms = ADNI_transform_ADVIT(opt.aug)
     logger_main = Logger(save_dir)
 
     # prepare kfold splits
@@ -72,7 +71,7 @@ if __name__ == '__main__':
 
     # initialize model, optimizer, loss
     def init_model(model):
-        net_model = Mnet().to(device)
+        net_model = ADVIT().to(device)
         return net_model
 
     def train_model(train_dataloader, val_dataloader, test_dataloader, fold, weights):
@@ -82,8 +81,8 @@ if __name__ == '__main__':
         logger = Logger(save_path_fold)
         # initialize model, optimizer and loss
         net_model = init_model(opt.model)
-        optimizer = torch.optim.SGD(net_model.parameters(), lr=0.001, momentum=0.9)
-        lr_schedualer = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[6, 21], gamma=0.1)
+        optimizer = torch.optim.Adam(net_model.parameters(), lr=0.0001, weight_decay=opt.weight_decay)
+        # lr_schedualer = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[6, 21], gamma=0.1)
         # criterion = torch.nn.CrossEntropyLoss(weight=weights.to(device))
         criterion = torch.nn.CrossEntropyLoss()
 
@@ -118,8 +117,8 @@ if __name__ == '__main__':
         # lr_schedualer_handler = create_lr_scheduler_with_warmup(lr_schedualer, warmup_start_value=opt.lr * 0.1,
         #                                                         warmup_end_value=opt.lr, warmup_duration=3)
         # trainer_label.add_event_handler(Events.EPOCH_STARTED, lr_schedualer_handler)
-        lr_schedualer_handler = LRScheduler(lr_schedualer)
-        trainer_label.add_event_handler(Events.EPOCH_STARTED, lr_schedualer_handler)
+        # lr_schedualer_handler = LRScheduler(lr_schedualer)
+        # trainer_label.add_event_handler(Events.EPOCH_STARTED, lr_schedualer_handler)
 
         # define validation step
         def val_step(engine, batch):

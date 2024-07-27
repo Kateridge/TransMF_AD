@@ -2,18 +2,15 @@ import numpy as np
 import pandas as pd
 import os
 import glob
-from MKLpy.preprocessing import normalization, rescale_01, rescale, centering
+from MKLpy.preprocessing import normalization, rescale_01
 from MKLpy import generators
 from MKLpy.metrics import pairwise
 from MKLpy.preprocessing import kernel_normalization
-from MKLpy.algorithms import AverageMKL
 
 
 root_dir = '/media/kateridge/data/Datasets/ADNI_FDG/CAPS'
 mri_paths = glob.glob(os.path.join(root_dir, 'subjects', '*', 'ses-M00', 't1', 'spm',
                                    'dartel', 'group-ADNI', 'atlas_statistics', '*AAL2*'))
-# pet_paths = glob.glob(os.path.join(root_dir, 'subjects', '*', 'ses-M00', 'pet', 'preprocessing',
-#                                    'group-ADNI', 'atlas_statistics', '*AAL2*'))
 mri_ROIs = []
 pet_ROIs = []
 y = []

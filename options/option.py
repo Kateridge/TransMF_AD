@@ -16,18 +16,18 @@ class Option:
 
     def initialize(self, parser):
         """Define the common options that are used in both training and CNN_PET_ADCN."""
-        parser.add_argument('--name', type=str, default='ADCN_CNN+MRI3',
+        parser.add_argument('--name', type=str, default='ADCN_CNN',
                             help='name of the experiment. It decides where to store samples and models')
-        parser.add_argument('--dataroot', type=str, default='/home/kateridge/Projects/Projects/Datasets/ADNI')
+        parser.add_argument('--dataroot', type=str, default='/mnt/c/Users/YWZhang/Projects/Datasets/ADNI/ADNI_OLD')
         parser.add_argument('--aug', type=str, default='True')
         parser.add_argument('--mode', type=str, default='train')
         parser.add_argument('--dataset', type=str, default='ADNI')
-        parser.add_argument('--model', type=str, default='CNN')
+        parser.add_argument('--model', type=str, default='Transformer')
         parser.add_argument('--randint', type=str, default='False')
-        parser.add_argument('--extra_sample', type=str, default='True')
+        parser.add_argument('--extra_sample', type=str, default='False')
         parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints', help='models are saved here')
         parser.add_argument('--task', type=str, default='ADCN')
-        parser.add_argument('--batch_size', type=int, default=16, help='input batch size')
+        parser.add_argument('--batch_size', type=int, default=2, help='input batch size')
         parser.add_argument('--lr', type=float, default=1e-4, help='initial learning rate for SGD')
         parser.add_argument('--optimizer', type=str, default='Adam')
         parser.add_argument('--stage1_epochs', type=int, default=20)

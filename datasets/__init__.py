@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from monai.data import CacheDataset
 import sys
 from datasets.ADNI import *
-from datasets.U8Data import *
 from monai.data import DataLoader, Dataset, partition_dataset
 import numpy as np
 import os
@@ -93,34 +92,6 @@ def get_dataset(opt):
         print('The number of val images = %d' % len(val_dataset))
         print('The number of CNN_PET_ADCN images = %d' % len(test_dataset))
         # get dataloaders
-        train_dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=0)
-        val_dataloader = DataLoader(val_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=0)
-        test_dataloader = DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=0)
-        return train_dataloader, val_dataloader, test_dataloader
-    elif opt.dataset == 'U8Data':
-        print('----------------- Dataset -------------------')
-        print('Loading U8Data dataset.....')
-        # if opt.task == 'pretrain':
-        #     U8Dataset = U8Data(dataroot='/home/kateridge/Projects/Projects/Datasets/U8Data', label_filename='av45_label.csv', task=opt.task)
-        #     train_transforms, test_transforms = U8Data_transform()
-        #     train_dataset = Dataset(data=U8Dataset.data_dict, transform=train_transforms)
-        #     print('The number of training images = %d' % len(train_dataset))
-        #     train_dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=0)
-        #     return train_dataloader
-        U8Dataset = U8Data(dataroot='/home/kateridge/Projects/Projects/Datasets/U8Data', label_filename='av45_label.csv', task=opt.task)
-        train_transforms, test_transforms = U8Data_transform()
-        U8Dataset = partition_dataset(data=U8Dataset.data_dict, ratios=[0.6, 0.2, 0.2],
-                                      shuffle=True)
-        train_dataset, val_dataset, test_dataset = U8Dataset[0], U8Dataset[1], U8Dataset[2]
-        # save dataset partitions
-        save_dataset_partition(train_dataset, val_dataset, test_dataset, os.path.join(opt.checkpoints_dir, opt.name))
-        # get datasets
-        train_dataset = Dataset(data=train_dataset, transform=train_transforms)
-        val_dataset = Dataset(data=val_dataset, transform=test_transforms)
-        test_dataset = Dataset(data=test_dataset, transform=test_transforms)
-        print('The number of training images = %d' % len(train_dataset))
-        print('The number of val images = %d' % len(val_dataset))
-        print('The number of CNN_PET_ADCN images = %d' % len(test_dataset))
         train_dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=0)
         val_dataloader = DataLoader(val_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=0)
         test_dataloader = DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=0)

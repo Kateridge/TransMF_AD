@@ -1,23 +1,25 @@
 import glob
 import random
+
 import numpy as np
 import torch
-from datasets.ADNI import ADNI, ADNI_transform
-from models.mymodel import model_CNN, model_ad
+from datasets.ADNI import ADNI, ADNI_transform_Mnet
 from options.option import Option
 from sklearn.model_selection import KFold, train_test_split
-from torch.utils.data import DataLoader, SubsetRandomSampler
+from torch.utils.data import DataLoader
 from monai.data import Dataset
 import ignite
 from ignite.metrics import Accuracy, Loss, Average, ConfusionMatrix
 from ignite.engine import Engine, Events
 from ignite.contrib.handlers import ProgressBar
 from ignite.contrib.metrics import ROC_AUC
-from ignite.handlers import Checkpoint, global_step_from_engine, DiskSaver, create_lr_scheduler_with_warmup, LRScheduler
-from utils.utils import getOptimizer, cal_confusion_metrics, mkdirs, get_dataset_weights
+from ignite.handlers import Checkpoint, global_step_from_engine, DiskSaver, LRScheduler
+from utils.utils import cal_confusion_metrics, mkdirs, get_dataset_weights
 from torch.nn.functional import softmax
 from utils.utils import Logger
 import os
+from models.MiSePyNet import Mnet
+
 
 if __name__ == '__main__':
     device = torch.device('cuda:{}'.format(0))
@@ -25,64 +27,65 @@ if __name__ == '__main__':
     opt = Option().parse()
     save_dir = os.path.join('./checkpoints', opt.name)
     # load ADNI dataset
-    ADNI_MCI = ADNI(dataroot='/home/kateridge/Projects/Projects/Datasets/ADNI_SPM',
-                label_filename='ADNI.csv', task=opt.task)
-    train_transforms, val_transforms = ADNI_transform()
-    ADNI_MCI_dataset = Dataset(data=ADNI_MCI.data_dict, transform=train_transforms)
-    ADNI_ADCN = ADNI(dataroot='/home/kateridge/Projects/Projects/Datasets/ADNI_SPM', label_filename='ADNI.csv', task='ADCN')
-    ADNI_MCI_len = len(ADNI_MCI_dataset)
-    ADCN_len = len(ADNI_ADCN)
-    # print(ADNI_MCI.data_dict.extend(ADNI_ADCN.data_dict))
-    ADNI_train_dataset = Dataset(data=ADNI_MCI.data_dict + ADNI_ADCN.data_dict, transform=train_transforms)
-    ADNI_test_dataset = Dataset(data=ADNI_MCI.data_dict + ADNI_ADCN.data_dict, transform=val_transforms)
+    ADNI_data = ADNI(dataroot=opt.dataroot, label_filename='ADNI.csv', task=opt.task).data_dict
+    train_transforms, val_transforms = ADNI_transform_Mnet(opt.aug)
+    logger_main = Logger(save_dir)
 
     # prepare kfold splits
     num_fold = 5
-    kfold_splits = KFold(n_splits=num_fold, shuffle=True, random_state=42)
+    seed = 1
+    if opt.task == 'ADCN':
+        seed = 42
+    elif opt.task == 'pMCIsMCI':
+        seed = 996
+    if opt.randint == 'True':
+        seed = random.randint(1, 1000)
+    print(f'The random seed is {seed}')
+    kfold_splits = KFold(n_splits=num_fold, shuffle=True, random_state=seed)
 
     # get dataloaders according to splits
-    def setup_dataflow(train_dataset, test_dataset, train_idx, test_idx):
+    def setup_dataflow(train_idx, test_idx):
         # further split training set and validation set
-        train_idx, val_idx = train_test_split(train_idx, test_size=0.2, random_state=42)
-        extra_idx = [x + ADNI_MCI_len for x in range(ADCN_len)]
-        train_idx = np.concatenate([train_idx, np.array(extra_idx)], axis=0)
+        train_idx, val_idx = train_test_split(train_idx, test_size=0.2, random_state=seed)
 
-        # create subsampler
-        train_sampler = SubsetRandomSampler(train_idx)
-        val_sampler = SubsetRandomSampler(val_idx)
-        test_sampler = SubsetRandomSampler(test_idx)
+        train_data = [ADNI_data[i] for i in train_idx.tolist()]
+        val_data = [ADNI_data[i] for i in val_idx.tolist()]
+        test_data = [ADNI_data[i] for i in test_idx.tolist()]
 
-        # create dataloaders
-        train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, sampler=train_sampler, drop_last=True)
-        val_loader = DataLoader(test_dataset, batch_size=opt.batch_size, sampler=val_sampler)
-        test_loader = DataLoader(test_dataset, batch_size=opt.batch_size, sampler=test_sampler)
+        if opt.task == 'pMCIsMCI' and opt.extra_sample == 'True':
+            ADNI_ADCN_data = ADNI(dataroot=opt.dataroot, label_filename='ADNI.csv', task='ADCN').data_dict
+            train_data += ADNI_ADCN_data
 
-        # weights = get_dataset_weights(dataset, train_idx)
-        return train_loader, val_loader, test_loader
+        # create datasets
+        train_dataset = Dataset(data=train_data, transform=train_transforms)
+        val_dataset = Dataset(data=val_data, transform=val_transforms)
+        test_dataset = Dataset(data=test_data, transform=val_transforms)
+        print(f'Train Datasets: {len(train_dataset)}')
+        train_loader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, drop_last=True)
+        val_loader = DataLoader(val_dataset, batch_size=opt.batch_size)
+        test_loader = DataLoader(test_dataset, batch_size=opt.batch_size)
 
+        weights = get_dataset_weights(train_dataset, train_idx)
+        print(f'Val Datasets: {len(val_dataset)}')
+        print(f'Test Datasets: {len(test_dataset)}')
+        return train_loader, val_loader, test_loader, weights
 
     # initialize model, optimizer, loss
     def init_model(model):
-        net_model = None
-        if model == 'Transformer':
-            net_model = model_ad(dim=opt.dim, depth=opt.trans_enc_depth, heads=8,
-                                 dim_head=opt.dim // 8, mlp_dim=opt.dim * 4, dropout=opt.dropout).to(device)
-        elif model == 'CNN':
-            net_model = model_CNN(dim=opt.dim).to(device)
+        net_model = Mnet().to(device)
         return net_model
 
-
-    def train_model(train_dataloader, val_dataloader, test_dataloader, fold):
+    def train_model(train_dataloader, val_dataloader, test_dataloader, fold, weights):
         # create fold checkpoint directory
         save_path_fold = os.path.join(save_dir, str(fold))
         mkdirs(save_path_fold)
         logger = Logger(save_path_fold)
         # initialize model, optimizer and loss
-        net_model = init_model('Transformer')
-        optimizer, lr_schedualer = getOptimizer(net_model.parameters(), opt)
+        net_model = init_model(opt.model)
+        optimizer = torch.optim.SGD(net_model.parameters(), lr=0.001, momentum=0.9)
+        lr_schedualer = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[6, 21], gamma=0.1)
         # criterion = torch.nn.CrossEntropyLoss(weight=weights.to(device))
         criterion = torch.nn.CrossEntropyLoss()
-        res_fold = []
 
         # define train step
         def train_step(engine, batch):
@@ -98,24 +101,12 @@ if __name__ == '__main__':
             optimizer.zero_grad()
 
             # forward
-            output_logits, D_MRI_logits, D_PET_logits = net_model(MRI, PET)
+            output_logits = net_model(MRI, PET)
             output_dic['logits'] = output_logits
-            output_dic['D_MRI_logits'] = D_MRI_logits
-            output_dic['D_PET_logits'] = D_PET_logits
-
-            ce_loss = criterion(output_logits, label)
-            mri_gt = torch.ones([D_MRI_logits.shape[0]], dtype=torch.int64).to(MRI.device)
-            pet_gt = torch.zeros([D_PET_logits.shape[0]], dtype=torch.int64).to(PET.device)
-
-            output_dic['D_MRI_label'] = mri_gt
-            output_dic['D_PET_label'] = pet_gt
-            ad_loss = (criterion(D_MRI_logits, mri_gt) + criterion(D_PET_logits, pet_gt)) / 2
-            # print(D_logits)
-            output_dic['ce_loss'] = ce_loss.item()
-            output_dic['ad_loss'] = ad_loss.item()
+            all_loss = criterion(output_logits, label)
+            output_dic['loss'] = all_loss.item()
 
             # backward
-            all_loss = ad_loss + ce_loss
             all_loss.backward()
 
             # update param
@@ -144,7 +135,7 @@ if __name__ == '__main__':
                 output_dic['label'] = label
 
                 # forward
-                output_logits, _, _ = net_model(MRI, PET)
+                output_logits = net_model(MRI, PET)
                 output_dic['logits'] = output_logits
                 all_loss = criterion(output_logits, label)
                 output_dic['loss'] = all_loss.item()
@@ -166,10 +157,7 @@ if __name__ == '__main__':
 
         # metrics
         train_metrics = {"accuracy": Accuracy(output_transform=lambda x: [x['logits'], x['label']]),
-                         "MRI_accuracy": Accuracy(output_transform=lambda x: [x['D_MRI_logits'], x['D_MRI_label']]),
-                         "PET_accuracy": Accuracy(output_transform=lambda x: [x['D_PET_logits'], x['D_PET_label']]),
-                         "ce_loss": Average(output_transform=lambda x: x['ce_loss']),
-                         "ad_loss": Average(output_transform=lambda x: x['ad_loss'])}
+                         "loss": Average(output_transform=lambda x: x['loss'])}
         val_metrics = {"accuracy": Accuracy(output_transform=lambda x: [x['logits'], x['label']]),
                        "confusion": ConfusionMatrix(num_classes=2,
                                                     output_transform=one_hot_transform(target='logits')),
@@ -191,11 +179,7 @@ if __name__ == '__main__':
             curr_lr = optimizer.param_groups[0]['lr']
             logger.print_message((f'Current learning rate: {curr_lr}'))
             logger.print_message(f"Training Results - Epoch[{trainer_label.state.epoch}] ")
-            logger.print_message(f"ce_loss: {metrics['ce_loss']:.4f} "
-                                 f"ad_loss: {metrics['ad_loss']:.4f} "
-                                 f"accuracy: {metrics['accuracy']:.4f} "
-                                 f"MRIaccuracy: {metrics['MRI_accuracy']:.4f} "
-                                 f"PETaccuracy: {metrics['PET_accuracy']:.4f} ")
+            logger.print_message(f"loss: {metrics['loss']:.4f} accuracy: {metrics['accuracy']:.4f}")
 
         # logging for validation every epochw
         @trainer_label.on(Events.EPOCH_COMPLETED)
@@ -233,26 +217,22 @@ if __name__ == '__main__':
             logger.print_message(f"loss: {metrics['loss']:.4f} accuracy: {metrics['accuracy']:.4f} "
                                  f"sensitivity: {sen:.4f} specificity: {spe:.4f} "
                                  f"f1 score: {f1:.4f} AUC: {metrics['auc']:.4f} ")
+            logger_main.print_message_nocli(f"loss: {metrics['loss']:.4f} accuracy: {metrics['accuracy']:.4f} "
+                                 f"sensitivity: {sen:.4f} specificity: {spe:.4f} "
+                                 f"f1 score: {f1:.4f} AUC: {metrics['auc']:.4f} ")
             res_fold = [metrics['loss'], metrics['accuracy'], sen, spe, f1, metrics['auc']]
             evaluator.state.res_fold = res_fold
 
-        trainer_label.run(train_dataloader, opt.stage1_epochs + opt.stage2_epochs)
+        trainer_label.run(train_dataloader, 40)
 
         return evaluator.state.res_fold
 
     results = []
-    logger_main = Logger(save_dir)
-    for fold_idx, (train_idx, test_idx) in enumerate(kfold_splits.split(np.arange(len(ADNI_MCI_dataset)))):
+    for fold_idx, (train_idx, test_idx) in enumerate(kfold_splits.split(np.arange(len(ADNI_data)))):
         logger_main.print_message(f'************Fold {fold_idx}************')
-        train_dataloader, val_dataloader, test_dataloader = setup_dataflow(ADNI_train_dataset, ADNI_test_dataset, train_idx, test_idx)
-        results.append(train_model(train_dataloader, val_dataloader, test_dataloader, fold_idx))
-        # log best metric every fold
-        # logger_main.print_message(f'The best metrics for Fold {fold_idx} :')
-        # sen, spe, f1 = cal_confusion_metrics(best_metrics['confusion'])
-        # logger_main.print_message(f"loss: {best_metrics['loss']:.4f} accuracy: {best_metrics['accuracy']:.4f} "
-        #                           f"sensitivity: {sen:.4f} specificity: {spe:.4f} "
-        #                           f"f1 score: {f1:.4f} AUC: {best_metrics['auc']:.4f} ")
-        # results.append([best_metrics['loss'], best_metrics['accuracy'], sen, spe, f1, best_metrics['auc']])
+        train_dataloader, val_dataloader, test_dataloader, weights = setup_dataflow(train_idx, test_idx)
+        results.append(train_model(train_dataloader, val_dataloader, test_dataloader, fold_idx, weights))
+
     # calculate mean and std for each metrics
     results = np.array(results)
     res_mean = np.mean(results, axis=0)
@@ -264,3 +244,4 @@ if __name__ == '__main__':
                               f'spe: {res_mean[3]:.4f} +- {res_std[3]:.4f}\n'
                               f'f1: {res_mean[4]:.4f} +- {res_std[4]:.4f}\n'
                               f'auc: {res_mean[5]:.4f} +- {res_std[5]:.4f}\n')
+    print(f'The random seed is {seed}')

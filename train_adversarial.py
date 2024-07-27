@@ -4,17 +4,15 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 from options.option import Option
 from datasets import get_dataset
 from utils.utils import getOptimizer, cal_confusion_metrics, Logger
-from models.mymodel import stage1_network, stage2_network, model_pretrain
-from monai.data import DataLoader, Dataset
+from models.mymodel import model_ad
 from ignite.metrics import Accuracy, Loss, Average, ConfusionMatrix
 from ignite.engine import Engine, Events
 from ignite.contrib.handlers import ProgressBar
 from ignite.contrib.metrics import ROC_AUC
-from ignite.handlers import Checkpoint, global_step_from_engine, DiskSaver, create_lr_scheduler_with_warmup
+from ignite.handlers import Checkpoint, global_step_from_engine, DiskSaver, create_lr_scheduler_with_warmup, LRScheduler
 import torch, ignite
-from torch.nn.functional import softmax, adaptive_max_pool1d
+from torch.nn.functional import softmax
 from glob import glob
-from einops import rearrange
 
 if __name__ == '__main__':
     # get device GPU
@@ -23,21 +21,17 @@ if __name__ == '__main__':
     # get options
     opt = Option().parse()
     save_dir = os.path.join('./checkpoints', opt.name)
-    logger = Logger(opt)
+    logger = Logger(save_dir)
 
     # get datasets and dataloaders
-    if opt.task == 'pretrain':
-        train_dataloader = get_dataset(opt)
-    else:
-        train_dataloader, val_dataloader, test_dataloader = get_dataset(opt)
-    # torch.save({'train': train_dataloader, 'val': val_dataloader, 'CNN_PET_ADCN': test_dataloader}, 'dataloaders.pt')
+    train_dataloader, val_dataloader, test_dataloader = get_dataset(opt)
 
     # get networks
-    net_model = model_pretrain(dim=opt.dim, cl_dim=opt.dim, t=0.07, depth=opt.trans_enc_depth, heads=4,
-                               dim_head=opt.dim // 4, mlp_dim=opt.dim * 4, dropout=opt.dropout).to(device)
+    net_model = model_ad(dim=opt.dim, depth=opt.trans_enc_depth, heads=8,
+                         dim_head=opt.dim // 8, mlp_dim=opt.dim * 4, dropout=opt.dropout).to(device)
 
     logger.print_message('----------------- Model Param -------------------')
-    logger.print_message('Model: %.2fM*2' % (sum([param.nelement() for param in net_model.parameters()]) / 1e6))
+    logger.print_message('Model: %.2fM' % (sum([param.nelement() for param in net_model.parameters()]) / 1e6))
     logger.print_message('----------------- Train Log -------------------')
 
     # get optimizers
@@ -45,82 +39,6 @@ if __name__ == '__main__':
 
     # get loss
     criterion = torch.nn.CrossEntropyLoss()
-
-
-    # define train steps
-    def pretrain_step(engine, batch):
-        output_dic = {}
-        # set model to train mode
-        net_model.train()
-
-        # decompose batch data
-        MRI = batch['MRI'].to(device)
-        PET = batch['PET'].to(device)
-        # age = batch['age'].to(device)
-        # b, _, _, _, _ = MRI.shape
-        # age = age.reshape(b, 1)
-
-        # zero grad
-        optimizer.zero_grad()
-
-        # forward
-        loss_cl, loss_match = net_model.pretrain_forward(MRI, PET)
-        loss = 0.2 * loss_cl + 0.8 * loss_match
-        output_dic['loss_cl'] = loss_cl.item()
-        output_dic['loss_match'] = loss_match.item()
-        output_dic['loss'] = -loss.item()
-
-        # backward
-        loss.backward()
-
-        # update param
-        optimizer.step()
-        return output_dic
-
-
-    trainer = Engine(pretrain_step)
-    ProgressBar().attach(trainer)
-
-
-    class one_hot_transform:
-        def __init__(self, target):
-            self.target = target
-
-        def __call__(self, output):
-            y_pred, y = output[self.target], output['label']
-            y_pred = torch.argmax(y_pred, dim=1).long()
-            y_pred = ignite.utils.to_onehot(y_pred, 2)
-            y = y.long()
-            return y_pred, y
-
-
-    # stage1 metrics
-    train_metrics = {"loss_cl": Average(output_transform=lambda x: x['loss_cl']),
-                     "loss_match": Average(output_transform=lambda x: x['loss_match']),
-                     "loss": Average(output_transform=lambda x: x['loss'])}
-
-    # attach train metrics
-    for name, metric in train_metrics.items():
-        metric.attach(trainer, name)
-
-
-    # logging for training every epoch
-    @trainer.on(Events.EPOCH_COMPLETED)
-    def log_training_results(trainer):
-        metrics = trainer.state.metrics
-        logger.print_message('-------------------------------------------------')
-        curr_lr = optimizer.param_groups[0]['lr']
-        logger.print_message(f'Current learning rate: {curr_lr}')
-        logger.print_message(f"Training Results - Epoch[{trainer.state.epoch}] ")
-        logger.print_message(
-            f"Total_loss: {metrics['loss']:.4f} loss_cl: {metrics['loss_cl']:.4f} loss_match: {metrics['loss_match']:.4f}")
-
-
-    # save model according to loss
-    checkpoint_saver = Checkpoint({'net_model': net_model}, save_handler=DiskSaver(save_dir, require_empty=False),
-                                  n_saved=1, filename_prefix='best', score_name='loss')
-    trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_saver)
-
 
     # training with label #
     ############################################################################################################
@@ -135,14 +53,25 @@ if __name__ == '__main__':
         output_dic['label'] = label
         # zero grad
         optimizer.zero_grad()
-
         # forward
-        output_logits = net_model(MRI, PET)
+        output_logits, D_MRI_logits, D_PET_logits = net_model(MRI, PET)
         output_dic['logits'] = output_logits
-        all_loss = criterion(output_logits, label)
-        output_dic['loss'] = all_loss.item()
+        output_dic['D_MRI_logits'] = D_MRI_logits
+        output_dic['D_PET_logits'] = D_PET_logits
+
+        ce_loss = criterion(output_logits, label)
+        mri_gt = torch.ones([D_MRI_logits.shape[0]], dtype=torch.int64).to(MRI.device)
+        pet_gt = torch.zeros([D_PET_logits.shape[0]], dtype=torch.int64).to(PET.device)
+
+        output_dic['D_MRI_label'] = mri_gt
+        output_dic['D_PET_label'] = pet_gt
+        ad_loss = (criterion(D_MRI_logits, mri_gt) + criterion(D_PET_logits, pet_gt)) / 2
+        # print(D_logits)
+        output_dic['ce_loss'] = ce_loss.item()
+        output_dic['ad_loss'] = ad_loss.item()
 
         # backward
+        all_loss = ad_loss + ce_loss
         all_loss.backward()
 
         # update param
@@ -152,10 +81,8 @@ if __name__ == '__main__':
 
     trainer_label = Engine(train_step)
     ProgressBar().attach(trainer_label)
-    lr_schedualer_handler = create_lr_scheduler_with_warmup(lr_schedualer, warmup_start_value=opt.lr * 0.2,
-                                                            warmup_end_value=opt.lr, warmup_duration=3)
+    lr_schedualer_handler = LRScheduler(lr_schedualer)
     trainer_label.add_event_handler(Events.EPOCH_STARTED, lr_schedualer_handler)
-
 
     # define validation step
     def val_step(engine, batch):
@@ -171,10 +98,10 @@ if __name__ == '__main__':
             output_dic['label'] = label
 
             # forward
-            output_logits = net_model(MRI, PET)
+            output_logits, _, _ = net_model(MRI, PET)
             output_dic['logits'] = output_logits
-            all_loss = criterion(output_logits, label)
-            output_dic['loss'] = all_loss.item()
+            ce_loss = criterion(output_logits, label)
+            output_dic['loss'] = ce_loss.item()
             return output_dic
 
 
@@ -196,7 +123,10 @@ if __name__ == '__main__':
 
     # metrics
     train_metrics = {"accuracy": Accuracy(output_transform=lambda x: [x['logits'], x['label']]),
-                     "loss": Average(output_transform=lambda x: x['loss'])}
+                     "MRI_accuracy": Accuracy(output_transform=lambda x: [x['D_MRI_logits'], x['D_MRI_label']]),
+                     "PET_accuracy": Accuracy(output_transform=lambda x: [x['D_PET_logits'], x['D_PET_label']]),
+                     "ce_loss": Average(output_transform=lambda x: x['ce_loss']),
+                     "ad_loss": Average(output_transform=lambda x: x['ad_loss'])}
     val_metrics = {"accuracy": Accuracy(output_transform=lambda x: [x['logits'], x['label']]),
                    "confusion": ConfusionMatrix(num_classes=2,
                                                 output_transform=one_hot_transform(target='logits')),
@@ -219,7 +149,11 @@ if __name__ == '__main__':
         curr_lr = optimizer.param_groups[0]['lr']
         logger.print_message((f'Current learning rate: {curr_lr}'))
         logger.print_message(f"Training Results - Epoch[{trainer_label.state.epoch}] ")
-        logger.print_message(f"loss: {metrics['loss']:.4f} accuracy: {metrics['accuracy']:.4f}")
+        logger.print_message(f"ce_loss: {metrics['ce_loss']:.4f} "
+                             f"ad_loss: {metrics['ad_loss']:.4f} "
+                             f"accuracy: {metrics['accuracy']:.4f} "
+                             f"MRIaccuracy: {metrics['MRI_accuracy']:.4f} "
+                             f"PETaccuracy: {metrics['PET_accuracy']:.4f} ")
 
 
     # logging for validation every epochw
@@ -237,16 +171,10 @@ if __name__ == '__main__':
     # save model according to ACC or AUC
     checkpoint_saver = Checkpoint({'net_model': net_model}, save_handler=DiskSaver(save_dir, require_empty=False),
                                   n_saved=1, filename_prefix='best_label', score_name='accuracy',
-                                  global_step_transform=global_step_from_engine(trainer_label))
+                                  global_step_transform=global_step_from_engine(trainer_label),
+                                  greater_or_equal=True)
     evaluator.add_event_handler(Events.COMPLETED, checkpoint_saver)
 
-
-    @trainer_label.on(Events.STARTED)
-    def load_best_pretrain_model(trainer_label):
-        best_model_path = glob(os.path.join(save_dir, 'best_net_model_*.pt'))[0]
-        checkpoint_all = torch.load(best_model_path, map_location=device)
-        Checkpoint.load_objects(to_load={'net_model': net_model}, checkpoint=checkpoint_all)
-        logger.print_message(f'Load best model {best_model_path}')
 
     @trainer_label.on(Events.COMPLETED)
     def run_on_test(trainer_label):
@@ -266,11 +194,5 @@ if __name__ == '__main__':
                              f"sensitivity: {sen:.4f} specificity: {spe:.4f} "
                              f"f1 score: {f1:.4f} AUC: {metrics['auc']:.4f} ")
 
-    # run trainer
-    if opt.mode == 'pretrain':
-        trainer.run(train_dataloader, opt.stage1_epochs + opt.stage2_epochs)
-    if opt.mode == 'train':
-        trainer_label.run(train_dataloader, opt.stage1_epochs + opt.stage2_epochs)
 
-
-
+    trainer_label.run(train_dataloader, opt.stage1_epochs + opt.stage2_epochs)
