@@ -40,7 +40,7 @@ Label file
 
 ``conda create --name <env> --file requirements.txt``
 
-## Running the Model
+## Run the Model
 
 ``python kfold_train_adversarial.py --randint False --aug True --batch_size 8 --name <expr_name> --task <ADCN/pMCIsMCI> --model <CNN/Transformer> --dataroot <data_dir>
 ``
