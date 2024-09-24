@@ -13,11 +13,11 @@ This repo contains PyTorch implementation of the paper: Transformer-based Multim
 Directory structure
 
    ````
-   ├── MRI                            # MRI images are put here
+   ├── MRI                            # MRI images
    │    ├── sub-ADNI001S0001.nii.gz
    │    ├── sub-ADNI009S0001.nii.gz   
    │    ├── ...
-   ├── PET                            # PET images are put here
+   ├── PET                            # PET images
    │    ├── sub-ADNI001S0001.nii.gz
    │    ├── sub-ADNI009S0001.nii.gz
    │    ├── ...
